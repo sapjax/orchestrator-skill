@@ -3,11 +3,65 @@
 [![skills.sh](https://skills.sh/b/sapjax/orchestrator-skill)](https://skills.sh/sapjax/orchestrator-skill)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-An agent skill for AI coding assistants (Claude Code, Cursor, Codex, OpenCode, Antigravity, etc.) to act as a high-level **Orchestrator & Coordinator (统筹负责人)**.
+**English** | [简体中文](README-zh.md)
 
-Focuses on overall strategy formulation, task decomposition, sub-agent delegation, and progress tracking, without directly writing implementation code.
+An agent skill that turns your AI coding assistant (Claude Code, Cursor, Codex, OpenCode, pi, Antigravity, ...) into a high-level **Orchestrator**: it owns strategy, task decomposition, delegation, and acceptance — and never writes code itself.
 
 ---
+
+## 🎭 Role system
+
+| Role | Accountable for | Tools | Dispatched when |
+| --- | --- | --- | --- |
+| **orchestrator** (main session) | *delivered* — strategy, decomposition, arbitration, acceptance | reads code (to judge, never to implement) | always |
+| **scout** | fast codebase recon: relevant files, entry points, data flow, risks | read-only | before decomposition, unfamiliar codebase |
+| **researcher** | external/docs research with a cited brief | read-only + web | technology selection, unverified external facts |
+| **worker** | *done* — end-to-end implementation and self-validation | **the only role with write access** | every implementation subtask |
+| **reviewer** | *correct* — independent review against the task spec | **read-only, never edits** | after every worker deliverable (mandatory) |
+| **oracle** | second opinion on risky plans; challenges assumptions | read-only, advisory | before committing to high-risk decisions |
+
+**Single-writer rule.** The worker is the only role that edits code. The reviewer reports findings *with suggested fixes* (file:line + proposed change); the worker applies them. Every change travels one pipeline — written by worker, checked by reviewer — so disputes stay clean and no unreviewed change ever lands.
+
+**The orchestrator reads, never writes.** Reading code is explicitly allowed (and required) for three purposes: arbitrating worker↔reviewer disputes, spot-checking deliverables against acceptance criteria, and understanding enough to decompose and delegate. Line-by-line review and any file edit remain off-limits — those belong to reviewer and worker.
+
+## 🔄 Operating flow
+
+```mermaid
+flowchart TD
+    A[Receive request] --> B{Unfamiliar codebase?}
+    B -- yes --> S[scout: read-only recon] --> C
+    B -- no --> C{Unknown external facts?}
+    C -- yes --> RS[researcher: sourced brief] --> D
+    C -- no --> D[Decompose into subtasks<br/>+ acceptance criteria]
+    D --> HD{High-risk plan?}
+    HD -- yes --> O[oracle: second opinion] --> W
+    HD -- no --> W[worker: implement end-to-end]
+    W --> R[reviewer: fresh context, read-only]
+    R --> V{Verdict}
+    V -- "FAIL, rounds left" --> F[findings → worker fixes] --> R
+    V -- "FAIL, cap reached" --> X[Escalate to user]
+    V -- PASS --> M{More subtasks?}
+    M -- yes --> W
+    M -- no --> AC[Acceptance: reviewer verdicts<br/>+ orchestrator read-code spot-check] --> Z[Deliver]
+```
+
+## ✅ Review protocol
+
+- **Fresh context, always.** The reviewer is a newly-spawned sub-agent — never a continuation of the worker's session. It gets the task spec, the acceptance criteria, and the diff — but *not* the worker's self-justification. A fresh reviewer checks the deliverable against the spec; a self-reviewing worker only re-reads its own reasoning.
+- **Structured verdict:** `PASS` / `PASS_WITH_NITS` / `FAIL` plus findings tagged `blocker | major | minor | nit`, each with file:line, rationale, and a suggested fix.
+- **Severity gates:** only `blocker` and `major` can fail a review. Minor issues are recorded, never blocking — proportionality is built in, so review can't degenerate into nitpicking.
+- **Round cap: 3.** FAIL → findings back to the worker → fix → re-review. Still failing after 3 rounds stops the loop and escalates to the user.
+- **Re-review verifies fixes.** Round 2+ hands the previous findings list to a fresh reviewer, which only checks that each finding was addressed — preventing scope drift and ever-growing findings.
+
+## ⚖️ Arbitration protocol
+
+When the worker rejects a finding and the reviewer insists, the orchestrator reads the disputed code and both arguments, then rules one of three ways:
+
+1. **Must fix** — returned to the worker with the ruling;
+2. **Downgrade** — recorded as non-blocking, proceed;
+3. **Product-level trade-off** — escalated to the user.
+
+The reviewer and worker never edit each other's work and never debate indefinitely — the orchestrator is the tie-breaker. This is why the orchestrator must be allowed to *read* code: without that, final acceptance would collapse into listening to two claims it cannot judge.
 
 ## 📦 Installation
 
@@ -15,15 +69,11 @@ Install via the [skills](https://github.com/vercel-labs/skills) CLI:
 
 ### Global Installation (Recommended)
 
-Make it available across all your coding assistant sessions:
-
 ```bash
 npx skills add sapjax/orchestrator-skill -g
 ```
 
 ### Project Installation
-
-Install only into the current repository:
 
 ```bash
 npx skills add sapjax/orchestrator-skill
@@ -45,54 +95,68 @@ npx skills add sapjax/orchestrator-skill -a cursor -g
 npx skills use sapjax/orchestrator-skill@orchestrator
 ```
 
----
+## 🚀 Usage
 
-## 🎯 What is Orchestrator? (统筹负责人)
+Once installed, the skill activates automatically whenever your request needs multi-step coordination — just state the goal. (In harnesses that support slash-invoked skills you can also trigger it explicitly with `/orchestrator <task>`.)
 
-统筹负责人专注于全局方针制定、任务分解委派与进度管理，**切勿亲自进行具体实现与代码编写**。
+### Example 1 — Feature implementation (any harness)
 
-### 核心工作原则
+> Add GitHub OAuth login to this app. Tests included.
 
-1. **明确角色定位与职责边界**
-   - **职责所在**：理解用户诉求与目标、制定方针与技术策略、拆解任务委派子代理、协调协作与依赖、全局验收。
-   - **切勿越界**：切勿亲自编写具体业务代码或进行底层细节实现，全部作业交由子代理完成。
+What the orchestrator does:
 
-2. **充分授权（Empowerment & Autonomy）**
-   - **端到端独立完成**：委派具体作业并赋予自主判断权与上下文，使子代理具备独立闭环能力。
-   - **避免过度交互**：杜绝事无巨细的微观管理（Micromanagement）与频繁反复确认，明确交付标准并信任其执行。
+1. **scout** — read-only recon: locate the auth module, routing, existing session handling
+2. Decompose into subtasks with acceptance criteria: OAuth client setup · callback + session management · tests
+3. Per subtask: **worker** implements end-to-end → **reviewer** reviews independently
+   - Round 1 verdict on subtask 2: `FAIL` — "callback does not validate the `state` parameter (`major`, src/auth/callback.ts:41)" → worker fixes → round 2: `PASS`
+4. Final acceptance — reviewer verdicts plus the orchestrator's read-code spot-check → delivered with the full review trail
 
-3. **追求卓越（Excellence）**
-   - 始终以行业最佳实践为标杆，架构清晰健壮、可维护、符合生态标准。
+### Example 2 — Same request under pi + pi-subagents
 
-4. **避免过度工程（Pragmatic Engineering）**
-   - 严守实用主义原则，杜绝脱离实际需求的预先过度抽象与层层冗余封装，遵循 YAGNI 与 KISS 法则。
+The flow is identical, but the orchestrator dispatches the built-in agents through the `subagent` tool instead of embedding role charters:
 
-5. **杜绝过度防御（Proportionate Defense）**
-   - 安全与防御性设计必须与实际业务场景及具体风险级别相符，不搞脱离威胁模型的繁琐防御层。
-
-6. **聚焦核心本质（Focus on the Core）**
-   - 始终专注解决核心业务价值与关键瓶颈问题，抓大放小，不做吹毛求疵式的方案审查。
-
----
-
-## 🔄 运作流程指南
-
-```mermaid
-flowchart TD
-    A[接收用户需求 / 目标] --> B[分析目标与技术方案]
-    B --> C[拆解任务与定义职责边界]
-    C --> D[下发并充分授权子代理]
-    D --> E[跟踪进度与管理依赖]
-    E --> F{是否达标?}
-    F -- 否 --> G[协调调整 / 指导子代理修正]
-    G --> D
-    F -- 是 --> H[全局验收与交付]
+```
+subagent({ agent: "scout",    task: "Recon: auth module, routing, session handling..." })
+subagent({ agent: "worker",   task: "Subtask 2: implement OAuth callback + session..." })
+subagent({ agent: "reviewer", task: "Report findings only; do not edit files. Verify against spec: ..." })
+→ FAIL findings back to worker → re-review with prior findings attached (cap 3)
 ```
 
-1. **目标拆解**：将复杂目标分解为职责独立、边界清晰的子任务。
-2. **任务委派**：明确任务背景、目标、约束条件与验收标准，充分授权子代理自主做出局部技术决策。
-3. **协同推进**：关注里程碑与阻塞点，协助子代理扫清障碍，保持主干清晰。
-4. **成果验收**：从整体可用性、质量标准与用户需求匹配度进行宏观验收。
+### Example 3 — Risky refactor
+
+> Migrate our state management from Redux to Zustand.
+
+**researcher** verifies the migration path against current docs, **scout** maps every store consumer, and — because the plan is high-risk — **oracle** challenges the migration strategy before any code is written. Only then does the worker → reviewer pipeline start, subtask by subtask.
+
+
+## 🔧 Harness adaptation
+
+The skill itself is pure instruction text — it constrains the orchestrator model, which then drives whatever sub-agent mechanism the harness provides. It detects its environment once and adapts:
+
+- **Universal (default).** On any sub-agent-capable harness, sub-agents are spawned with an embedded role charter — a per-role preamble plus task context. Read-only roles get an explicit "do not create, modify, or delete any files" instruction, and per-sub-agent tool restriction is applied where the harness supports it. If the harness has no sub-agents at all, the phases run sequentially with the independent-review step still enforced.
+- **pi + [pi-subagents](https://github.com/nicobailon/pi-subagents) (first-class).** The orchestrator dispatches the **named built-in agents** (`scout`, `researcher`, `worker`, `reviewer`, `oracle`) through the `subagent` tool — the dispatch carries only task context, since the role system prompts already exist — and composes the review loop the same way: worker → fresh read-only reviewer → findings back to worker → re-review, cap 3.
+
+## 🧠 Pi Per-role model assignment
+
+Different roles benefit from different models: scout is volume recon (fast/cheap is fine), worker wants the strongest coding model, and reviewer/oracle benefit from being *different* models — model diversity catches the author-model's blind spots. Under pi, configure it in `.pi/settings.json` (project) or `~/.pi/agent/settings.json` (user); project wins:
+
+```json
+{
+  "subagents": {
+    "defaultModel": "fast-model-id",
+    "agentOverrides": {
+      "scout":    { "model": "fast-model-id" },
+      "worker":   { "model": "strongest-coding-model" },
+      "reviewer": { "model": "strong-model", "inheritProjectContext": false },
+      "oracle":   { "model": "different-strong-model" }
+    }
+  }
+}
+```
+
+Precedence: per-run override (`/run reviewer[model=provider/model:high] "..."`) → `agentOverrides.<name>.model` → agent frontmatter → `subagents.defaultModel` → parent session model.
+
+On harnesses without per-sub-agent model config, all roles run on the session model.
 
 ---
 
