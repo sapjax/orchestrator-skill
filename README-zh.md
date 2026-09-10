@@ -3,6 +3,8 @@
 [![skills.sh](https://skills.sh/b/sapjax/orchestrator-skill)](https://skills.sh/sapjax/orchestrator-skill)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
+[English](README.md) | **简体中文**
+
 适用于各类 AI 编程助手（Claude Code、Cursor、Codex、OpenCode、Antigravity 等）的 Agent Skill，使其担任高层**统筹负责人（Orchestrator & Coordinator）**。
 
 专注于全局方针制定、任务拆解委派与进度跟踪管理，**切勿亲自进行具体实现与代码编写**。
